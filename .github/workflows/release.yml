@@ -61,7 +61,7 @@ jobs:
         # The release-create job downloads these and attaches them to
         # the release in one shot. Per-job upload here keeps the
         # build/release split clean.
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.image }}
           path: staging/${{ matrix.image }}.tar.xz
