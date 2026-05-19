@@ -39,6 +39,7 @@ jobs:
         # matrix entry — keeps surprises out of CI.
         image:
           - service-base
+          - nomad-client
     steps:
       - uses: actions/checkout@v6
 

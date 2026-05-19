@@ -12,12 +12,14 @@ YAML, get back a Proxmox-ready container template.
 
 ## Images
 
-| Image          | Description                                                       | Used by                                                                       |
-|----------------|-------------------------------------------------------------------|-------------------------------------------------------------------------------|
-| `service-base` | Debian 13 (trixie) + podman + buildah + skopeo + fuse-overlayfs + cloud-init | Long-lived service LXCs (token-server, registry, dispatcher) in the fleet |
+| Image           | Description                                                         | Used by                                                                       |
+|-----------------|---------------------------------------------------------------------|-------------------------------------------------------------------------------|
+| `service-base`  | Debian 13 (trixie) + podman + buildah + skopeo + fuse-overlayfs + cloud-init | Long-lived service LXCs (token-server, registry, dispatcher) in the fleet |
+| `nomad-client`  | `service-base` shape + Nomad agent binary (pinned) + nomad user + systemd unit | Nomad worker nodes — each runs podman containers for CI jobs at runtime    |
 
-More images will land via PR — `nomad-client` (service-base + Nomad
-agent) is the next planned recipe.
+The Nomad service in `nomad-client` is installed but **not enabled**
+— operator drops a config at `/etc/nomad.d/nomad.hcl` then
+`systemctl enable --now nomad` (via cloud-init / Ansible).
 
 ## Build
 

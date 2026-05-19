@@ -1,0 +1,245 @@
+---
+# nomad-client — service-base + Nomad agent binary.
+#
+# Drop-in template for Nomad worker nodes in the
+# nkg/terraform-proxmox-fleet platform. The LXC runs the Nomad agent
+# in client mode, and Nomad spawns podman containers for the actual
+# CI runner jobs.
+#
+# Why a separate image instead of just installing Nomad on top of
+# service-base via cloud-init runcmd? Two reasons:
+#   1. Bake-time install is reproducible — every LXC clones from the
+#      same versioned binary; cloud-init install can race apt repos
+#      and pin to whatever's "latest" at boot time.
+#   2. Nomad clients are the hot path in this platform (every CI job
+#      lands here). Cold-boot delay matters; pre-baked saves ~30s per
+#      LXC instantiation.
+#
+# Nomad version is pinned in `actions:`. Bumping is a deliberate
+# change (`feat: bump nomad to X.Y.Z`).
+
+image:
+  description: "Debian {{ image.release }} + podman + Nomad client (nkg)"
+  distribution: debian
+  release: trixie
+  architecture: amd64
+  expiry: 30d
+  variant: default
+  name: nkg-nomad-client-{{ image.release }}-{{ image.architecture }}
+
+source:
+  downloader: debootstrap
+  url: http://deb.debian.org/debian
+  keyserver: keyserver.ubuntu.com
+  same_as: gutsy
+
+targets:
+  lxc:
+    create_message: |-
+      Welcome to {{ image.description }}
+      Nomad binary is at /usr/local/bin/nomad. The nomad.service
+      systemd unit is installed but NOT enabled — drop a config at
+      /etc/nomad.d/nomad.hcl and run `systemctl enable --now nomad`.
+    config:
+      - type: all
+        before: 5
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/debian.common.conf
+      - type: user
+        before: 5
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/debian.userns.conf
+      - type: all
+        after: 4
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/common.conf
+      - type: user
+        after: 4
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/userns.conf
+      - type: all
+        content: |-
+          lxc.arch = x86_64
+
+files:
+  - path: /etc/hostname
+    generator: hostname
+
+  - path: /etc/hosts
+    generator: hosts
+
+  - path: /etc/machine-id
+    generator: remove
+
+  - path: /etc/resolv.conf
+    generator: remove
+
+  - path: /etc/systemd/network/eth0.network
+    generator: dump
+    content: |-
+      [Match]
+      Name=eth0
+
+      [Network]
+      DHCP=yes
+
+  - path: /etc/ssh/sshd_config.d/10-nkg.conf
+    generator: dump
+    content: |-
+      PasswordAuthentication no
+      PermitRootLogin prohibit-password
+      ChallengeResponseAuthentication no
+      UsePAM yes
+      X11Forwarding no
+      PrintMotd no
+
+  # Nomad systemd unit. Upstream's official unit (slightly tweaked
+  # for our binary location and to default to client mode).
+  - path: /etc/systemd/system/nomad.service
+    generator: dump
+    content: |-
+      [Unit]
+      Description=Nomad
+      Documentation=https://www.nomadproject.io/docs/
+      Wants=network-online.target
+      After=network-online.target
+
+      # Drop-in to wait for podman socket if you wire Nomad's podman
+      # driver — service-base sets up podman.socket, but Nomad doesn't
+      # strictly need it before starting.
+
+      [Service]
+      Type=notify
+      EnvironmentFile=-/etc/nomad.d/nomad.env
+      User=nomad
+      Group=nomad
+      ExecReload=/bin/kill -HUP $MAINPID
+      ExecStart=/usr/local/bin/nomad agent -config /etc/nomad.d
+      KillMode=process
+      KillSignal=SIGINT
+      LimitNOFILE=65536
+      LimitNPROC=infinity
+      Restart=on-failure
+      RestartSec=2
+
+      ## Configure unit start rate limiting. Failsafe.
+      StartLimitBurst=3
+      StartLimitIntervalSec=10
+
+      TasksMax=infinity
+      OOMScoreAdjust=-1000
+
+      [Install]
+      WantedBy=multi-user.target
+
+  # Skeleton config — operator overwrites at deploy time. Living here
+  # means an unconfigured LXC starts cleanly (no missing-file errors)
+  # if someone accidentally enables the service before configuring.
+  - path: /etc/nomad.d/.gitkeep
+    generator: dump
+    content: ""
+
+packages:
+  manager: apt
+  update: true
+  cleanup: true
+  sets:
+    - packages:
+        # System base — same set as service-base.
+        - systemd
+        - systemd-sysv
+        - ca-certificates
+        - cloud-init
+        - cloud-initramfs-growroot
+        - sudo
+        - openssh-server
+        - tzdata
+        - locales
+
+        # Operator basics.
+        - curl
+        - jq
+        - git
+        - vim-tiny
+        - less
+        - htop
+
+        # Container runtime — podman, used by Nomad's podman driver
+        # at runtime to spawn CI runner workloads.
+        - podman
+        - buildah
+        - skopeo
+        - fuse-overlayfs
+        - uidmap
+        - slirp4netns
+
+        # Nomad install needs `unzip` to unpack the release tarball;
+        # `getent` is in base but we explicitly list `passwd` /
+        # `adduser` for the nomad user creation in actions below.
+        - unzip
+        - adduser
+      action: install
+
+actions:
+  - trigger: post-packages
+    action: |-
+      #!/bin/sh -eux
+
+      # ---- systemd / podman setup (mirrors service-base) ----
+
+      systemctl enable systemd-networkd
+
+      mkdir -p /etc/containers
+      cat > /etc/containers/storage.conf <<'EOF'
+      [storage]
+      driver = "overlay"
+      runroot = "/run/containers/storage"
+      graphroot = "/var/lib/containers/storage"
+
+      [storage.options]
+      mount_program = "/usr/bin/fuse-overlayfs"
+      EOF
+
+      cat > /etc/containers/registries.conf <<'EOF'
+      unqualified-search-registries = ["docker.io", "quay.io"]
+      short-name-mode = "permissive"
+      EOF
+
+      systemctl enable podman.socket
+
+      echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+      locale-gen
+      update-locale LANG=en_US.UTF-8
+      ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+
+      # ---- Nomad install ----
+
+      # Pinned version. Bump as a deliberate change.
+      NOMAD_VERSION=1.8.4
+
+      # Dedicated unprivileged user matching upstream's recommendation.
+      adduser --system --group --no-create-home --home /var/lib/nomad nomad
+      install -d -o nomad -g nomad -m 0700 /var/lib/nomad
+      install -d -o root  -g root  -m 0755 /etc/nomad.d
+
+      # Fetch + install binary. Use the official HashiCorp release.
+      curl -fsSL -o /tmp/nomad.zip \
+        "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
+      unzip -o /tmp/nomad.zip -d /usr/local/bin/
+      chmod 0755 /usr/local/bin/nomad
+      rm -f /tmp/nomad.zip
+
+      # Sanity: binary runs and reports the expected version.
+      /usr/local/bin/nomad version
+
+      # Service is installed but NOT enabled. Operator drops a config
+      # at /etc/nomad.d/nomad.hcl and runs `systemctl enable --now
+      # nomad` from cloud-init / Ansible.
+      systemctl daemon-reload || true
+
+  - trigger: post-files
+    action: |-
+      #!/bin/sh -eux
+
+      # Lock root (cloud-init lays in SSH keys per instance).
+      passwd -l root
