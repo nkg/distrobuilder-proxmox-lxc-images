@@ -8,7 +8,7 @@
 #   make lint           Run yamllint over the recipes
 #
 # Override PVE_HOST and PVE_STORAGE to point uploads at your Proxmox host:
-#   make upload-service-base PVE_HOST=vaterland.local PVE_STORAGE=local
+#   make upload-service-base PVE_HOST=pve-01.local PVE_STORAGE=local
 
 SHELL := /usr/bin/env bash
 

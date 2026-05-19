@@ -64,14 +64,14 @@ to consumers — pin to a specific tag in any consuming automation.
 ## Upload to a Proxmox host
 
 ```bash
-make upload-service-base PVE_HOST=vaterland.local
+make upload-service-base PVE_HOST=pve-01.local
 # scp's the tarball to /var/lib/vz/template/cache/service-base.tar.xz
 ```
 
 Override the datastore if vztmpl lives elsewhere:
 
 ```bash
-make upload-service-base PVE_HOST=vaterland.local PVE_STORAGE=nfs-templates
+make upload-service-base PVE_HOST=pve-01.local PVE_STORAGE=nfs-templates
 ```
 
 ## Reference from Terraform
@@ -83,7 +83,7 @@ lxcs = {
   "registry" = {
     hostname         = "registry"
     vm_id            = 1202
-    ip_address       = "172.16.0.132/24"
+    ip_address       = "192.168.1.132/24"
     template_file_id = "local:vztmpl/service-base.tar.xz"
     nesting          = true   # for podman
     keyctl           = true
