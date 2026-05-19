@@ -1,0 +1,106 @@
+name: Release
+
+# Tag-driven release flow. Push a `v<x>.<y>.<z>` tag → this builds
+# every image fresh and attaches the tarballs to a GitHub Release.
+#
+# Consumers download stable artefacts straight from the release page
+# instead of relying on 14-day workflow-artifact retention.
+#
+# Example tag: `v0.2.0`
+#
+# Assets land at:
+#   https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/v0.2.0/service-base.tar.xz
+#   https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/v0.2.0/nomad-client.tar.xz
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag name to release (e.g. v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write  # needed to create the release + upload assets
+
+jobs:
+  build:
+    name: build (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # Mirror CI's matrix. Keep these two in lockstep when adding
+        # new recipes.
+        image:
+          - service-base
+          - nomad-client
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install distrobuilder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y debootstrap
+          sudo snap install distrobuilder --classic
+
+      - name: Build ${{ matrix.image }}
+        run: sudo ./scripts/build-image.sh ${{ matrix.image }}
+
+      - name: Stage tarball for release
+        # Rename to a stable filename — no SHA suffix — so the
+        # download URL is predictable for operators.
+        run: |
+          mkdir -p staging
+          cp output/${{ matrix.image }}/${{ matrix.image }}.tar.xz staging/
+
+      - name: Upload tarball as workflow artifact (intermediate)
+        # The release-create job downloads these and attaches them to
+        # the release in one shot. Per-job upload here keeps the
+        # build/release split clean.
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image }}
+          path: staging/${{ matrix.image }}.tar.xz
+          retention-days: 1
+          if-no-files-found: error
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all built tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create release + upload assets
+        # softprops/action-gh-release wraps the API call neatly:
+        # creates the release with auto-generated notes from PRs
+        # merged since the previous tag, then uploads everything
+        # under `files:` as assets.
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: ${{ steps.tag.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            assets/service-base.tar.xz
+            assets/nomad-client.tar.xz
+          fail_on_unmatched_files: true

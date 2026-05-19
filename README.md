@@ -43,6 +43,24 @@ CI builds every image on push / PR and attaches the tarballs as
 workflow artifacts (14-day retention) — easiest path to a built
 image without a local Linux box.
 
+### Stable downloads via tagged releases
+
+Pushing a `v<x>.<y>.<z>` tag triggers
+[`.github/workflows/release.yml`](.github/workflows/release.yml),
+which rebuilds every image fresh and creates a GitHub Release with
+the tarballs attached as stable download assets. Operators consume
+those URLs from automation:
+
+```bash
+TAG=v0.2.0
+wget https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/${TAG}/service-base.tar.xz
+wget https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/${TAG}/nomad-client.tar.xz
+```
+
+Release notes are auto-generated from PRs merged since the previous
+tag. Tag bumps are the moment a recipe's behaviour visibly changes
+to consumers — pin to a specific tag in any consuming automation.
+
 ## Upload to a Proxmox host
 
 ```bash
