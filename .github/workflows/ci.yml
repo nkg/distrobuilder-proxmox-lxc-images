@@ -43,12 +43,16 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Install distrobuilder
-        # distrobuilder ships in the Ubuntu LTS archive. The runner is
-        # 24.04 (noble), which has a recent-enough version for our
-        # Debian Trixie targets.
+        # distrobuilder was removed from Ubuntu's apt archives (it
+        # lives only in upstream's snap channel now — Canonical's
+        # canonical distribution path, pun intended). Snap is
+        # pre-installed on ubuntu-latest runners, so this is a single
+        # `snap install` step. Adds ~30s vs an apt install but the
+        # alternative (build from source via Go) is slower and noisier.
         run: |
           sudo apt-get update
-          sudo apt-get install -y distrobuilder debootstrap
+          sudo apt-get install -y debootstrap
+          sudo snap install distrobuilder --classic
 
       - name: Build ${{ matrix.image }}
         run: sudo ./scripts/build-image.sh ${{ matrix.image }}

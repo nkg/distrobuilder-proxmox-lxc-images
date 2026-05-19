@@ -22,10 +22,12 @@ agent) is the next planned recipe.
 ## Build
 
 Distrobuilder must run as root (it mounts loop devices and chroots
-during the build). Install on Debian/Ubuntu:
+during the build). Install on Debian/Ubuntu (distrobuilder ships
+via snap; debootstrap stays in apt):
 
 ```bash
-sudo apt-get install distrobuilder debootstrap
+sudo apt-get install -y debootstrap
+sudo snap install distrobuilder --classic
 ```
 
 Then:

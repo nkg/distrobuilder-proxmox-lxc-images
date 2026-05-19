@@ -108,7 +108,6 @@ packages:
         # System base
         - systemd
         - systemd-sysv
-        - systemd-resolved
         - ca-certificates
         - cloud-init
         - cloud-initramfs-growroot
@@ -137,18 +136,22 @@ packages:
       action: install
 
 actions:
-  - trigger: post-update
-    action: |-
-      #!/bin/sh -eux
-      # Enable systemd-networkd + systemd-resolved (we removed the
-      # static /etc/resolv.conf above so resolved takes over).
-      systemctl enable systemd-networkd
-      systemctl enable systemd-resolved
-      ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+  # All real work lands in post-packages — that's the first lifecycle
+  # hook after my packages list is installed, so systemd-resolved,
+  # podman, locales, etc. are all available. The post-unpack /
+  # post-update triggers fire BEFORE the packages step and only see
+  # the debootstrap base, which is too thin for anything interesting.
 
   - trigger: post-packages
     action: |-
       #!/bin/sh -eux
+
+      # systemd-networkd for predictable interface management.
+      # /etc/resolv.conf is left to cloud-init / DHCP at first boot —
+      # systemd-resolved isn't installed (its post-install scriptlet
+      # fights distrobuilder's build-time bind-mount of /etc/resolv.conf,
+      # and the DNS-caching benefit doesn't pay for a per-LXC service).
+      systemctl enable systemd-networkd
 
       # podman storage: overlay with fuse-overlayfs (works in
       # unprivileged LXC without nesting acrobatics).
@@ -175,6 +178,12 @@ actions:
       # CT, so the rootful socket is what they want.
       systemctl enable podman.socket
 
+      # Sane locale + timezone defaults. Cloud-init can override.
+      echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+      locale-gen
+      update-locale LANG=en_US.UTF-8
+      ln -sf /usr/share/zoneinfo/UTC /etc/localtime
+
   - trigger: post-files
     action: |-
       #!/bin/sh -eux
@@ -182,9 +191,3 @@ actions:
       # Lock the root account password (cloud-init may set an SSH key;
       # otherwise the operator gets in via `pct enter` from the host).
       passwd -l root
-
-      # Sane locale + timezone defaults. Cloud-init can override.
-      echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
-      locale-gen
-      update-locale LANG=en_US.UTF-8
-      ln -sf /usr/share/zoneinfo/UTC /etc/localtime
