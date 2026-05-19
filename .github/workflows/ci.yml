@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ─── Lint: fast feedback on recipe edits ──────────────────────────
+
+  yamllint:
+    name: yamllint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: jdx/mise-action@v3
+        with:
+          install: true
+      - run: yamllint -c .yamllint.yml images/
+
+  # ─── Build: actually run distrobuilder against each recipe ─────────
+
+  build:
+    name: build (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    needs: yamllint
+    strategy:
+      fail-fast: false
+      matrix:
+        # Discover images at workflow-author time. New recipes need a
+        # matrix entry — keeps surprises out of CI.
+        image:
+          - service-base
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install distrobuilder
+        # distrobuilder ships in the Ubuntu LTS archive. The runner is
+        # 24.04 (noble), which has a recent-enough version for our
+        # Debian Trixie targets.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y distrobuilder debootstrap
+
+      - name: Build ${{ matrix.image }}
+        run: sudo ./scripts/build-image.sh ${{ matrix.image }}
+
+      - name: Attach tarball as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.image }}-${{ github.sha }}
+          path: output/${{ matrix.image }}/${{ matrix.image }}.tar.xz
+          retention-days: 14
+          if-no-files-found: error
+
+  # ─── PR hygiene ───────────────────────────────────────────────────
+
+  pr-title:
+    name: PR title is conventional
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            chore
+            ci
+            docs
+            test
+            refactor
+            perf
+          requireScope: false

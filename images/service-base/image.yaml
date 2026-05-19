@@ -1,0 +1,190 @@
+---
+# service-base — Debian 13 (trixie) unprivileged LXC with podman.
+#
+# Designed for the long-lived service LXCs in the
+# nkg/terraform-proxmox-fleet platform: token-server, registry,
+# dispatcher. Each runs a single OCI container via podman; the LXC is
+# just a sized + networked sandbox around it.
+#
+# What's baked in:
+#   - podman + buildah + skopeo + fuse-overlayfs (rootless container runtime)
+#   - openssh-server with PasswordAuthentication disabled
+#   - sudo, ca-certificates, curl, jq, git (operator basics)
+#   - cloud-init (so per-instance config — hostname, SSH keys, runcmd —
+#     comes from Proxmox at clone time)
+#   - systemd-networkd for predictable network setup
+#
+# What's NOT baked in:
+#   - Nomad agent (see images/nomad-client/ when that lands)
+#   - Application containers (those land at runtime via podman pull /
+#     systemd unit / quadlet — operator's choice)
+#   - SSH keys, hostname, IPs (cloud-init applies these per-instance)
+
+image:
+  description: "Debian {{ image.release }} podman-ready service LXC (nkg)"
+  distribution: debian
+  release: trixie
+  architecture: amd64
+  expiry: 30d
+  variant: default
+  name: nkg-service-base-{{ image.release }}-{{ image.architecture }}
+
+source:
+  downloader: debootstrap
+  url: http://deb.debian.org/debian
+  keyserver: keyserver.ubuntu.com
+  same_as: gutsy
+
+targets:
+  lxc:
+    create_message: |-
+      Welcome to {{ image.description }}
+      podman is available rootful (as root) and rootless (as the
+      `deploy` user, if cloud-init provisioned one).
+    config:
+      - type: all
+        before: 5
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/debian.common.conf
+      - type: user
+        before: 5
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/debian.userns.conf
+      - type: all
+        after: 4
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/common.conf
+      - type: user
+        after: 4
+        content: |-
+          lxc.include = LXC_TEMPLATE_CONFIG/userns.conf
+      - type: all
+        content: |-
+          lxc.arch = x86_64
+
+files:
+  - path: /etc/hostname
+    generator: hostname
+
+  - path: /etc/hosts
+    generator: hosts
+
+  - path: /etc/machine-id
+    generator: remove
+
+  - path: /etc/resolv.conf
+    generator: remove
+
+  # Predictable networking via systemd-networkd. Proxmox's cloud-init
+  # writes per-instance interface config; this file is the fallback
+  # default for DHCP on eth0.
+  - path: /etc/systemd/network/eth0.network
+    generator: dump
+    content: |-
+      [Match]
+      Name=eth0
+
+      [Network]
+      DHCP=yes
+
+  - path: /etc/ssh/sshd_config.d/10-nkg.conf
+    generator: dump
+    content: |-
+      # Locked down by default; cloud-init lays in the deploy user's
+      # authorized_keys per instance. Password auth stays off.
+      PasswordAuthentication no
+      PermitRootLogin prohibit-password
+      ChallengeResponseAuthentication no
+      UsePAM yes
+      X11Forwarding no
+      PrintMotd no
+
+packages:
+  manager: apt
+  update: true
+  cleanup: true
+  sets:
+    - packages:
+        # System base
+        - systemd
+        - systemd-sysv
+        - systemd-resolved
+        - ca-certificates
+        - cloud-init
+        - cloud-initramfs-growroot
+        - sudo
+        - openssh-server
+        - tzdata
+        - locales
+
+        # Operator basics
+        - curl
+        - jq
+        - git
+        - vim-tiny
+        - less
+        - htop
+
+        # Container runtime — podman over Docker because podman is
+        # daemonless + rootless-friendly, which fits unprivileged
+        # LXC much better than dockerd.
+        - podman
+        - buildah
+        - skopeo
+        - fuse-overlayfs
+        - uidmap
+        - slirp4netns
+      action: install
+
+actions:
+  - trigger: post-update
+    action: |-
+      #!/bin/sh -eux
+      # Enable systemd-networkd + systemd-resolved (we removed the
+      # static /etc/resolv.conf above so resolved takes over).
+      systemctl enable systemd-networkd
+      systemctl enable systemd-resolved
+      ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
+
+  - trigger: post-packages
+    action: |-
+      #!/bin/sh -eux
+
+      # podman storage: overlay with fuse-overlayfs (works in
+      # unprivileged LXC without nesting acrobatics).
+      mkdir -p /etc/containers
+      cat > /etc/containers/storage.conf <<'EOF'
+      [storage]
+      driver = "overlay"
+      runroot = "/run/containers/storage"
+      graphroot = "/var/lib/containers/storage"
+
+      [storage.options]
+      mount_program = "/usr/bin/fuse-overlayfs"
+      EOF
+
+      # Use registries.conf from podman defaults; just make sure
+      # short-name resolution doesn't silently pick docker.io.
+      cat > /etc/containers/registries.conf <<'EOF'
+      unqualified-search-registries = ["docker.io", "quay.io"]
+      short-name-mode = "permissive"
+      EOF
+
+      # Enable podman socket activation for the rootful socket —
+      # service LXCs typically run their container as root inside the
+      # CT, so the rootful socket is what they want.
+      systemctl enable podman.socket
+
+  - trigger: post-files
+    action: |-
+      #!/bin/sh -eux
+
+      # Lock the root account password (cloud-init may set an SSH key;
+      # otherwise the operator gets in via `pct enter` from the host).
+      passwd -l root
+
+      # Sane locale + timezone defaults. Cloud-init can override.
+      echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+      locale-gen
+      update-locale LANG=en_US.UTF-8
+      ln -sf /usr/share/zoneinfo/UTC /etc/localtime

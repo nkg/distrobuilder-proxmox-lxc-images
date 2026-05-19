@@ -1,0 +1,17 @@
+---
+# yamllint config. distrobuilder recipes have a few quirks (long
+# inline scripts, lots of multi-line strings) that the default rules
+# flag noisily. Relax the noisier ones; keep the structural checks.
+
+extends: default
+
+rules:
+  line-length:
+    max: 200
+    level: warning
+  document-start: disable
+  truthy:
+    check-keys: false
+  indentation:
+    spaces: 2
+    indent-sequences: true

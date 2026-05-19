@@ -1,0 +1,16 @@
+# Pinned toolchain. After cloning:
+#   mise install
+#   lefthook install
+#
+# Tools used:
+#   - distrobuilder: builds the LXC image tarballs from images/*/image.yaml
+#   - yamllint:      lints the image recipes
+#   - lefthook:      pre-commit hooks defined in lefthook.yml
+
+[tools]
+# distrobuilder needs to be installed separately (no upstream mise
+# registry entry yet — install from a release or apt on Debian/Ubuntu).
+# This file pins the linting tools and lefthook, which are enough to
+# develop the recipes locally without distrobuilder installed.
+yamllint = "1"
+lefthook = "1"
