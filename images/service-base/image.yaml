@@ -108,7 +108,6 @@ packages:
         # System base
         - systemd
         - systemd-sysv
-        - systemd-resolved
         - ca-certificates
         - cloud-init
         - cloud-initramfs-growroot
@@ -147,11 +146,12 @@ actions:
     action: |-
       #!/bin/sh -eux
 
-      # systemd-networkd + systemd-resolved (we removed the static
-      # /etc/resolv.conf in `files` above so resolved takes over).
+      # systemd-networkd for predictable interface management.
+      # /etc/resolv.conf is left to cloud-init / DHCP at first boot —
+      # systemd-resolved isn't installed (its post-install scriptlet
+      # fights distrobuilder's build-time bind-mount of /etc/resolv.conf,
+      # and the DNS-caching benefit doesn't pay for a per-LXC service).
       systemctl enable systemd-networkd
-      systemctl enable systemd-resolved
-      ln -sf /run/systemd/resolve/stub-resolv.conf /etc/resolv.conf
 
       # podman storage: overlay with fuse-overlayfs (works in
       # unprivileged LXC without nesting acrobatics).
