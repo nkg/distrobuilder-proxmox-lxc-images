@@ -95,7 +95,7 @@ jobs:
         # creates the release with auto-generated notes from PRs
         # merged since the previous tag, then uploads everything
         # under `files:` as assets.
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: ${{ steps.tag.outputs.tag }}
