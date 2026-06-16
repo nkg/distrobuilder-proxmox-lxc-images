@@ -14,24 +14,16 @@ permissions:
   contents: read
 
 jobs:
-  # ─── Lint: fast feedback on recipe edits ──────────────────────────
-
-  yamllint:
-    name: yamllint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: jdx/mise-action@v4
-        with:
-          install: true
-      - run: yamllint -c .yamllint.yml images/
+  # yamllint (over .github/ + images/) moved to lint-workflows.yml, which
+  # installs yamllint via uv. The old inline job used `mise install`, whose
+  # pipx backend broke on mise 2026.6.10 (passes pip an `--uploaded-prior-to`
+  # flag older pip rejects). build no longer gates on it; lint runs in parallel.
 
   # ─── Build: actually run distrobuilder against each recipe ─────────
 
   build:
     name: build (${{ matrix.image }})
     runs-on: ubuntu-latest
-    needs: yamllint
     strategy:
       fail-fast: false
       matrix:
