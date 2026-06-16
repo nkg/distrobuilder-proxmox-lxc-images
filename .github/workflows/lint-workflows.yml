@@ -5,11 +5,17 @@ on:
     paths:
       - ".github/workflows/**"
       - ".github/actions/**"
+      - "images/**"
   pull_request:
     paths:
       - ".github/workflows/**"
       - ".github/actions/**"
+      - "images/**"
 
 jobs:
   lint:
     uses: nkg/github-actions/.github/workflows/lint-workflows.yml@v2
+    with:
+      # Also yamllint the distrobuilder recipes (was the old inline job).
+      # uvx yamllint auto-discovers the repo's .yamllint.yml.
+      yamllint-paths: ".github/ images/"
