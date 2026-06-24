@@ -33,7 +33,7 @@ jobs:
           - service-base
           - nomad-client
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install distrobuilder
         # distrobuilder was removed from Ubuntu's apt archives (it
