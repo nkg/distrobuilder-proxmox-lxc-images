@@ -17,9 +17,12 @@ YAML, get back a Proxmox-ready container template.
 | `service-base`  | Debian 13 (trixie) + podman + buildah + skopeo + fuse-overlayfs + cloud-init | Long-lived service LXCs (token-server, registry, dispatcher) in the fleet |
 | `nomad-client`  | `service-base` shape + Nomad agent (2.0.5) + `nomad-driver-podman` (0.6.5), both checksum-verified, + nomad user + systemd unit | Nomad worker nodes — each runs podman containers for CI jobs at runtime    |
 
-The Nomad service in `nomad-client` is installed but **not enabled**
-— operator drops a config at `/etc/nomad.d/nomad.hcl` then
-`systemctl enable --now nomad` (via cloud-init / Ansible).
+The Nomad service in `nomad-client` is installed but **not enabled**.
+[`ansible-nomad-cluster`](https://github.com/nkg/ansible-nomad-cluster)
+renders `/etc/nomad.d/nomad.hcl` and enables it at bootstrap. The
+template deliberately ships no config fragment of its own — the role
+owns `data_dir` and `plugin_dir`, and two files setting them is a trap
+that surfaces as a client with no podman driver.
 
 ## Build
 
@@ -180,23 +183,33 @@ fleet boots from.
 | Component | Version | Installed to |
 |---|---|---|
 | Nomad agent | **2.0.5** | `/usr/local/bin/nomad` |
-| `nomad-driver-podman` | **0.6.5** | `/var/lib/nomad/plugins/` |
+| `nomad-driver-podman` | **0.6.5** | `/opt/nomad/plugins/` |
 
 **The podman task driver is a separate plugin** — the Nomad binary
 doesn't bundle it. Every job this platform runs uses
 `driver = "podman"`, and a client missing the plugin comes up looking
-perfectly healthy while placing nothing: allocations just sit pending
-with a "missing drivers" constraint failure. It's baked in so that
-can't happen.
+perfectly healthy while placing nothing: allocations sit pending with
+a "missing drivers" constraint failure.
 
-`/etc/nomad.d/00-base.hcl` sets `data_dir` and `plugin_dir`. Nomad
-merges every `*.hcl` in that directory, so the operator's `nomad.hcl`
-layers client config on top without restating the paths. Leave the
-base file in place — `plugin_dir` is what makes the driver findable.
+#### These versions are not independent
+
+Both must match the defaults in
+[`ansible-nomad-cluster`](https://github.com/nkg/ansible-nomad-cluster)
+(`nomad_version`, `nomad_driver_podman_version`, `nomad_plugin_dir`).
+That role is the authority: it version-checks what the template baked
+and reinstalls on a mismatch — and because the check is a string
+comparison rather than a floor, a *lower* role default silently
+downgrades the pre-baked binary on every converge. Bumping here alone
+doesn't ship a new version; it gets undone at bootstrap.
+
+Baking them at the role's paths is the point. The role no-ops when the
+versions already match, which is what makes the pre-baked template
+worth having; it already documents that arrangement for the Nomad
+binary itself.
 
 Bumping means changing **four** values in
 `images/nomad-client/image.yaml` — a version and a checksum for each
-component:
+component — *and* the corresponding role defaults:
 
 ```bash
 curl -s https://releases.hashicorp.com/nomad/<VERSION>/nomad_<VERSION>_SHA256SUMS \
@@ -205,23 +218,55 @@ curl -s https://releases.hashicorp.com/nomad-driver-podman/<VERSION>/nomad-drive
   | grep linux_amd64
 ```
 
-### Upgrading Nomad
+### Nomad 2.x and the podman driver
 
-Nomad requires **servers to be upgraded before clients**, and does not
-support skipping minor versions. Since this template is what every CI
-runner node boots from, getting that order wrong takes the whole
-runner pool offline at once.
+**Why 2.x:** 1.11.3 was the last community-edition 1.x release.
+`1.11.4`–`1.11.9` ship as `+ent` only, so remaining on 1.x meant
+running a version that receives no further community security patches.
+2.0.x is the maintained free line.
 
-Before bumping `NOMAD_VERSION`:
+**The caveat:** `nomad-driver-podman` 0.6.5 builds against Nomad
+1.11.1 and declares no Nomad 2.0 support. Since the podman driver is
+the execution substrate for every runner, this pairing is a deliberate
+bet rather than a supported combination.
 
-1. Check what the fleet's Nomad **servers** run: `nomad server members`.
-2. If they're behind, upgrade them first, one minor at a time, letting
-   each settle.
-3. Only then bump `NOMAD_VERSION` + `NOMAD_SHA256` here, rebuild, and
-   roll the client LXCs.
+Source analysis says the bet is sound:
 
-This is a non-issue on a greenfield fleet — deploy servers at the same
-2.x version the template carries and there's nothing to sequence.
+- the plugin handshake (`ProtocolVersion`, magic cookie) is
+  byte-identical across 1.11.1, 1.11.3 and 2.0.5
+- `driver.proto` changed only additively between 1.11.1 and 2.0.5 — no
+  removals, no renumbering, no type changes
+- 2.0.5 tolerates older drivers deliberately: its new `Init` and
+  `Shutdown` RPCs are optional, and the client ignores
+  `codes.Unimplemented`
+
+That establishes *interface* compatibility. It does not establish
+runtime behaviour, and one known 2.0.x change is worth watching:
+
+> **The alloc-logs bind mount.** Nomad 2.0.1 made the allocation logs
+> directory read-only for task drivers that support filesystem
+> isolation. The podman driver does. If anything in the runner path
+> writes into that directory, it breaks — and it would break at job
+> runtime, not at driver load.
+
+**Validate before trusting it with real jobs.** The procedure is
+written up in the fleet repo:
+[`Sproncy/GitHub-runners` → `docs/runbooks/nomad-2-spike.md`](https://github.com/sproncy/GitHub-runners/blob/main/docs/runbooks/nomad-2-spike.md)
+— boot a throwaway client, confirm the full runner lifecycle (register
+→ run → `--ephemeral --once` exit → dealloc), and check `nomad alloc
+logs` returns output. Since this template now bakes 2.0.5, the baked
+binary is the subject of that spike rather than its baseline; the
+runbook covers hand-installing 1.11.3 for the baseline leg.
+
+**Also relevant for servers:** Nomad 2.0 can migrate the Raft log
+store from BoltDB to WAL, and that migration is effectively one-way —
+reverting needs a snapshot taken beforehand. Not exercised by a `-dev`
+agent, but it matters the first time real servers come up.
+
+Whenever the version moves again: Nomad requires **servers upgraded
+before clients** and does not support skipping minor versions. Since
+this template is what every runner node boots from, getting that order
+wrong takes the whole runner pool offline at once.
 
 ### CI builds the artefacts
 

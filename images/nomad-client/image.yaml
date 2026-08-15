@@ -20,9 +20,11 @@
 # deliberate change (`feat: bump nomad to X.Y.Z`).
 #
 # The podman driver is a separate plugin — the Nomad binary does not
-# bundle it. It's baked in here because every job this platform runs
-# uses `driver = "podman"`, and a client without it comes up looking
-# healthy while placing nothing.
+# bundle it, and every job this platform runs uses `driver = "podman"`,
+# so a client without it comes up looking healthy while placing
+# nothing. ansible-nomad-cluster installs it too and is the authority
+# on the version; baking the same version at the same path means that
+# role no-ops rather than re-downloading on every client.
 
 image:
   description: "Debian {{ image.release }} + podman + Nomad client + podman driver (nkg)"
@@ -44,10 +46,10 @@ targets:
     create_message: |-
       Welcome to {{ image.description }}
       Nomad binary is at /usr/local/bin/nomad; the podman task driver
-      is at /var/lib/nomad/plugins/. The nomad.service systemd unit is
-      installed but NOT enabled — drop a config at
-      /etc/nomad.d/nomad.hcl and run `systemctl enable --now nomad`.
-      Paths come from /etc/nomad.d/00-base.hcl; leave it in place.
+      is at /opt/nomad/plugins/. The nomad.service systemd unit is
+      installed but NOT enabled — ansible-nomad-cluster renders
+      /etc/nomad.d/nomad.hcl and enables it. To configure by hand
+      instead, that file must set plugin_dir = "/opt/nomad/plugins".
     config:
       - type: all
         before: 5
@@ -140,21 +142,6 @@ files:
       [Install]
       WantedBy=multi-user.target
 
-  # Base config fragment. Nomad reads and merges every *.hcl in
-  # /etc/nomad.d, so the operator's nomad.hcl layers client/server
-  # config on top of this without restating the paths.
-  #
-  # plugin_dir is set explicitly rather than leaning on its
-  # <data_dir>/plugins default, so the podman driver installed below is
-  # still found if the operator points data_dir elsewhere. Getting this
-  # wrong is quiet: the client simply comes up advertising no podman
-  # driver, and every job the dispatcher submits sits unplaced.
-  - path: /etc/nomad.d/00-base.hcl
-    generator: dump
-    content: |-
-      data_dir   = "/var/lib/nomad"
-      plugin_dir = "/var/lib/nomad/plugins"
-
 packages:
   manager: apt
   update: true
@@ -230,12 +217,21 @@ actions:
 
       # ---- Nomad install ----
 
-      # Pinned versions. Bumping either is a deliberate change.
+      # Pinned versions. Bumping either is a deliberate change, and
+      # both must match ansible-nomad-cluster's defaults — that role
+      # version-checks what the template baked and reinstalls on a
+      # mismatch, so a disagreement here just gets undone at bootstrap
+      # while making the platform noisier.
       #
-      # On the 2.x line. Nomad requires servers to be upgraded before
-      # clients and does not support skipping minor versions, so once
-      # a fleet exists this must stay compatible with its servers —
-      # see "Upgrading Nomad" in the repo README before moving it.
+      # 2.0.x is the maintained free line. 1.11.3 was the last
+      # community-edition 1.x release — 1.11.4+ ship as +ent only, so
+      # staying on 1.x meant running something that receives no further
+      # community security patches.
+      #
+      # nomad-driver-podman 0.6.5 builds against Nomad 1.11.1 and
+      # declares no 2.0 support, so this pairing is deliberate and
+      # needs validating on real hardware — see "Nomad 2.x and the
+      # podman driver" in the README before trusting it with real jobs.
       NOMAD_VERSION=2.0.5
 
       # The podman task driver is a SEPARATE plugin — the Nomad binary
@@ -243,6 +239,11 @@ actions:
       # driver and every `driver = "podman"` job (i.e. everything
       # gha-nomad-dispatcher submits) sits unplaced with a
       # "missing drivers" constraint failure.
+      #
+      # ansible-nomad-cluster installs this too, and is the authority
+      # on it. Baking the same version at the same path means that
+      # role no-ops instead of re-downloading — the same arrangement it
+      # already documents for the nomad binary itself.
       NOMAD_PODMAN_VERSION=0.6.5
 
       # SHA256s of the linux_amd64 zips, from the SHA256SUMS published
@@ -258,9 +259,10 @@ actions:
       install -d -o nomad -g nomad -m 0700 /var/lib/nomad
       install -d -o root  -g root  -m 0755 /etc/nomad.d
 
-      # Matches plugin_dir in /etc/nomad.d/00-base.hcl, so the driver
-      # dropped here is found without extra operator configuration.
-      install -d -o nomad -g nomad -m 0755 /var/lib/nomad/plugins
+      # /opt/nomad/plugins is ansible-nomad-cluster's nomad_plugin_dir,
+      # and what its rendered nomad.hcl points plugin_dir at. Putting
+      # the driver anywhere else leaves it unused.
+      install -d -o nomad -g nomad -m 0755 /opt/nomad/plugins
 
       # Fetch + install binaries. Use the official HashiCorp releases.
       # Both are verified against their published checksums — an
@@ -284,14 +286,14 @@ actions:
       # and Nomad tries to load every file in plugin_dir as a plugin —
       # a stray text file there is a startup error, not an ignored file.
       unzip -o -j /tmp/nomad-driver-podman.zip nomad-driver-podman \
-        -d /var/lib/nomad/plugins/
-      chown nomad:nomad /var/lib/nomad/plugins/nomad-driver-podman
-      chmod 0755 /var/lib/nomad/plugins/nomad-driver-podman
+        -d /opt/nomad/plugins/
+      chown nomad:nomad /opt/nomad/plugins/nomad-driver-podman
+      chmod 0755 /opt/nomad/plugins/nomad-driver-podman
       rm -f /tmp/nomad-driver-podman.zip
 
       # Sanity: both binaries run and report the versions we pinned.
       /usr/local/bin/nomad version | grep -q "v${NOMAD_VERSION}"
-      test -x /var/lib/nomad/plugins/nomad-driver-podman
+      test -x /opt/nomad/plugins/nomad-driver-podman
 
       # Service is installed but NOT enabled. Operator drops a config
       # at /etc/nomad.d/nomad.hcl and runs `systemctl enable --now
