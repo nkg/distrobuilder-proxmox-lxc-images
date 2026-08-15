@@ -103,7 +103,7 @@ Each release ships, alongside the two tarballs:
 | Asset | What it is |
 |---|---|
 | `SHA256SUMS` | checksums for both tarballs |
-| `SHA256SUMS.sig` / `.pem` | cosign keyless signature + certificate |
+| `SHA256SUMS.bundle` | cosign keyless Sigstore bundle (signature + certificate + inclusion proof) |
 | `<image>.spdx.json` | SPDX SBOM of the rootfs package set |
 
 Plus SLSA build provenance recorded against the repository.
@@ -113,13 +113,11 @@ TAG=v0.3.0
 BASE=https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/${TAG}
 curl -fsSLO ${BASE}/service-base.tar.xz
 curl -fsSLO ${BASE}/SHA256SUMS
-curl -fsSLO ${BASE}/SHA256SUMS.sig
-curl -fsSLO ${BASE}/SHA256SUMS.pem
+curl -fsSLO ${BASE}/SHA256SUMS.bundle
 
 # 1. Verify the checksum file was signed by this repo's release workflow.
 cosign verify-blob SHA256SUMS \
-  --signature SHA256SUMS.sig \
-  --certificate SHA256SUMS.pem \
+  --bundle SHA256SUMS.bundle \
   --certificate-identity-regexp '^https://github.com/nkg/distrobuilder-proxmox-lxc-images/' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
