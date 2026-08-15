@@ -13,4 +13,4 @@
 # This file pins the linting tools and lefthook, which are enough to
 # develop the recipes locally without distrobuilder installed.
 yamllint = "1"
-lefthook = "1"
+lefthook = "2"
