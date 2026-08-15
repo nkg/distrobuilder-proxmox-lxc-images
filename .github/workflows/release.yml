@@ -25,6 +25,12 @@ on:
 
 permissions:
   contents: write  # needed to create the release + upload assets
+  # Keyless cosign signing exchanges the job's OIDC token for a
+  # short-lived Fulcio certificate — no long-lived key to store.
+  id-token: write
+  # Lets actions/attest-build-provenance record SLSA provenance for
+  # the tarballs.
+  attestations: write
 
 jobs:
   build:
@@ -90,6 +96,51 @@ jobs:
             echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           fi
 
+      # Checksums let an operator verify a downloaded tarball without
+      # any tooling beyond sha256sum, and give cosign a single small
+      # file to sign that covers both images.
+      - name: Generate SHA256SUMS
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          sha256sum service-base.tar.xz nomad-client.tar.xz > SHA256SUMS
+          cat SHA256SUMS
+
+      # SBOM: the LXC rootfs is a Debian install, so the meaningful
+      # bill of materials is its package set. Syft reads the dpkg
+      # database straight out of the tarball.
+      - name: Generate SBOM per image
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b /usr/local/bin
+          for img in service-base nomad-client; do
+            syft "file:assets/${img}.tar.xz" \
+              -o spdx-json="assets/${img}.spdx.json"
+          done
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v4
+
+      # Sign the checksum file rather than each tarball: verifying
+      # SHA256SUMS then checking hashes covers every asset, and keeps
+      # one signature to check instead of one per file.
+      - name: Sign SHA256SUMS (keyless)
+        working-directory: assets
+        run: |
+          set -euo pipefail
+          cosign sign-blob --yes \
+            --output-signature SHA256SUMS.sig \
+            --output-certificate SHA256SUMS.pem \
+            SHA256SUMS
+
+      - name: Attest build provenance for the tarballs
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: |
+            assets/service-base.tar.xz
+            assets/nomad-client.tar.xz
+
       - name: Create release + upload assets
         # softprops/action-gh-release wraps the API call neatly:
         # creates the release with auto-generated notes from PRs
@@ -103,4 +154,9 @@ jobs:
           files: |
             assets/service-base.tar.xz
             assets/nomad-client.tar.xz
+            assets/service-base.spdx.json
+            assets/nomad-client.spdx.json
+            assets/SHA256SUMS
+            assets/SHA256SUMS.sig
+            assets/SHA256SUMS.pem
           fail_on_unmatched_files: true
