@@ -120,7 +120,7 @@ jobs:
           done
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4
+        uses: sigstore/cosign-installer@v4.1.2
 
       # Sign the checksum file rather than each tarball: verifying
       # SHA256SUMS then checking hashes covers every asset, and keeps
@@ -135,7 +135,7 @@ jobs:
             SHA256SUMS
 
       - name: Attest build provenance for the tarballs
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             assets/service-base.tar.xz
