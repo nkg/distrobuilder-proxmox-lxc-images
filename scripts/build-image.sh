@@ -39,13 +39,15 @@ if ! command -v distrobuilder >/dev/null 2>&1; then
   exit 1
 fi
 
-mkdir -p "${OUT_DIR}"
-echo ">>> Building ${IMAGE} into ${OUT_DIR}"
-
-# distrobuilder must run as root.
+# distrobuilder must run as root. Re-exec before creating anything —
+# doing the mkdir first left output/ owned by the invoking user while
+# everything inside it came out root-owned.
 if [[ $EUID -ne 0 ]]; then
   exec sudo -E "$0" "$@"
 fi
+
+mkdir -p "${OUT_DIR}"
+echo ">>> Building ${IMAGE} into ${OUT_DIR}"
 
 # build-lxc emits rootfs.tar.xz + meta.tar.xz alongside each other.
 distrobuilder build-lxc "${SRC}" "${OUT_DIR}" --compression xz
@@ -57,13 +59,28 @@ distrobuilder build-lxc "${SRC}" "${OUT_DIR}" --compression xz
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-tar -xf "${OUT_DIR}/rootfs.tar.xz" -C "${WORK}"
-tar -xf "${OUT_DIR}/meta.tar.xz"   -C "${WORK}"
-tar -caf "${OUT_DIR}/${IMAGE}.tar.xz" -C "${WORK}" .
+# GNU tar does NOT preserve extended attributes by default, on either
+# extract or create. Without these flags the unpack/repack cycle
+# silently strips file capabilities from the rootfs — so binaries that
+# rely on them rather than setuid (ping's cap_net_raw being the classic
+# case) come out of the merge broken, in a way nothing in the build
+# reports. --numeric-owner keeps uid/gid as-is instead of remapping
+# through the build host's passwd database.
+TAR_XATTR_OPTS=(--xattrs --xattrs-include='*' --acls --numeric-owner)
+
+tar -xf "${OUT_DIR}/rootfs.tar.xz" -C "${WORK}" "${TAR_XATTR_OPTS[@]}"
+tar -xf "${OUT_DIR}/meta.tar.xz"   -C "${WORK}" "${TAR_XATTR_OPTS[@]}"
+tar -caf "${OUT_DIR}/${IMAGE}.tar.xz" -C "${WORK}" "${TAR_XATTR_OPTS[@]}" .
 
 # Drop the intermediate tarballs; the combined one is what Proxmox
 # wants in `local:vztmpl/`.
 rm -f "${OUT_DIR}/rootfs.tar.xz" "${OUT_DIR}/meta.tar.xz"
+
+# Hand the artefacts back to whoever invoked us, so `make clean` and
+# scp-ing the tarball don't need root of their own.
+if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
+  chown -R "${SUDO_UID}:${SUDO_GID}" "${ROOT_DIR}/output"
+fi
 
 echo ">>> Done: ${OUT_DIR}/${IMAGE}.tar.xz"
 echo
