@@ -221,20 +221,30 @@ curl -s https://releases.hashicorp.com/nomad-driver-podman/<VERSION>/nomad-drive
 ### Nomad 2.x and the podman driver
 
 **Why 2.x:** 1.11.3 was the last community-edition 1.x release.
-`1.11.4`–`1.11.9` ship as `+ent` only, so remaining on 1.x meant
-running a version that receives no further community security patches.
-2.0.x is the maintained free line.
+`1.11.4`–`1.11.9` ship as `+ent` only, so 1.x is not merely frozen —
+it is **already unpatched**. Nomad 2.0.1 (2026-05-12) fixed two CVEs
+that 1.11.3 (2026-03-11) predates, with no community release to
+backport them into:
 
-**The caveat:** `nomad-driver-podman` 0.6.5 builds against Nomad
-1.11.1 and declares no Nomad 2.0 support. Since the podman driver is
-the execution substrate for every runner, this pairing is a deliberate
-bet rather than a supported combination.
+| CVE | Fix |
+|---|---|
+| **CVE-2026-6959** | logging FIFO symlink-swap attacks |
+| **CVE-2026-7474** | dynamic host volumes: code execution outside the plugin directory |
+
+2.0.x is the maintained community line.
+
+**The caveat:** `nomad-driver-podman` 0.6.5 pins
+`github.com/hashicorp/nomad v1.11.3` and declares no Nomad 2.0 support.
+It shipped two months *after* Nomad 2.0.1, so 2.0 was available and
+not targeted. Since the podman driver is the execution substrate for
+every runner, this pairing is a deliberate bet rather than a supported
+combination.
 
 Source analysis says the bet is sound:
 
 - the plugin handshake (`ProtocolVersion`, magic cookie) is
-  byte-identical across 1.11.1, 1.11.3 and 2.0.5
-- `driver.proto` changed only additively between 1.11.1 and 2.0.5 — no
+  byte-identical between 1.11.3 and 2.0.5
+- `driver.proto` changed only additively between 1.11.3 and 2.0.5 — no
   removals, no renumbering, no type changes
 - 2.0.5 tolerates older drivers deliberately: its new `Init` and
   `Shutdown` RPCs are optional, and the client ignores
@@ -248,6 +258,10 @@ runtime behaviour, and one known 2.0.x change is worth watching:
 > isolation. The podman driver does. If anything in the runner path
 > writes into that directory, it breaks — and it would break at job
 > runtime, not at driver load.
+>
+> That mount *is* the CVE-2026-6959 mitigation. If it bites, the fix is
+> to stop writing there; rolling back to 1.11.3 reinstates the
+> vulnerability rather than avoiding a mere inconvenience.
 
 **Validate before trusting it with real jobs.** The procedure is
 written up in the fleet repo:

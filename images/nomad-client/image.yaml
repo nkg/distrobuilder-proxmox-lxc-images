@@ -228,10 +228,12 @@ actions:
       # staying on 1.x meant running something that receives no further
       # community security patches.
       #
-      # nomad-driver-podman 0.6.5 builds against Nomad 1.11.1 and
-      # declares no 2.0 support, so this pairing is deliberate and
-      # needs validating on real hardware — see "Nomad 2.x and the
-      # podman driver" in the README before trusting it with real jobs.
+      # nomad-driver-podman 0.6.5 pins Nomad 1.11.3 and declares no 2.0
+      # support, so this pairing is deliberate and needs validating on
+      # real hardware — see "Nomad 2.x and the podman driver" in the
+      # README before trusting it with real jobs. Staying on 1.11.3 is
+      # not the safe alternative: it predates the CVE fixes in 2.0.1
+      # and there is no community 1.11.4+ to backport them into.
       NOMAD_VERSION=2.0.5
 
       # The podman task driver is a SEPARATE plugin — the Nomad binary
