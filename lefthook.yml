@@ -11,7 +11,7 @@ pre-commit:
   parallel: true
   commands:
     yamllint:
-      glob: "**/*.{yml,yaml}"
+      glob: "{,**/}*.{yml,yaml}"
       run: yamllint {staged_files}
 
 pre-push:
