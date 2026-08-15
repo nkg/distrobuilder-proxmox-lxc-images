@@ -215,7 +215,18 @@ actions:
       # ---- Nomad install ----
 
       # Pinned version. Bump as a deliberate change.
-      NOMAD_VERSION=1.8.4
+      #
+      # Held on the 1.x line deliberately. Nomad requires servers to be
+      # upgraded before clients and does not support skipping minor
+      # versions, so this image must stay compatible with whatever the
+      # fleet's Nomad servers run. See the "Upgrading to Nomad 2.x"
+      # section in the repo README before moving this past 1.11.
+      NOMAD_VERSION=1.11.3
+
+      # SHA256 of nomad_${NOMAD_VERSION}_linux_amd64.zip, from
+      # https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_SHA256SUMS
+      # Refresh this whenever NOMAD_VERSION changes.
+      NOMAD_SHA256=19dac5642a2ba5305e6ff8efee06a708d760ebe4d1cd7936bc3dc526f477dc12
 
       # Dedicated unprivileged user matching upstream's recommendation.
       adduser --system --group --no-create-home --home /var/lib/nomad nomad
@@ -223,14 +234,20 @@ actions:
       install -d -o root  -g root  -m 0755 /etc/nomad.d
 
       # Fetch + install binary. Use the official HashiCorp release.
+      # Verified against the published checksum — an unexpected hash
+      # aborts the build rather than baking unknown bits into the
+      # template every CI runner in the fleet boots from.
       curl -fsSL -o /tmp/nomad.zip \
         "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_amd64.zip"
+      echo "${NOMAD_SHA256}  /tmp/nomad.zip" > /tmp/nomad.zip.sha256
+      sha256sum -c /tmp/nomad.zip.sha256
+      rm -f /tmp/nomad.zip.sha256
       unzip -o /tmp/nomad.zip -d /usr/local/bin/
       chmod 0755 /usr/local/bin/nomad
       rm -f /tmp/nomad.zip
 
-      # Sanity: binary runs and reports the expected version.
-      /usr/local/bin/nomad version
+      # Sanity: binary runs and reports the version we pinned.
+      /usr/local/bin/nomad version | grep -q "v${NOMAD_VERSION}"
 
       # Service is installed but NOT enabled. Operator drops a config
       # at /etc/nomad.d/nomad.hcl and runs `systemctl enable --now

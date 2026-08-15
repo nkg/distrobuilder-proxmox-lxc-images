@@ -15,7 +15,7 @@ YAML, get back a Proxmox-ready container template.
 | Image           | Description                                                         | Used by                                                                       |
 |-----------------|---------------------------------------------------------------------|-------------------------------------------------------------------------------|
 | `service-base`  | Debian 13 (trixie) + podman + buildah + skopeo + fuse-overlayfs + cloud-init | Long-lived service LXCs (token-server, registry, dispatcher) in the fleet |
-| `nomad-client`  | `service-base` shape + Nomad agent binary (pinned) + nomad user + systemd unit | Nomad worker nodes — each runs podman containers for CI jobs at runtime    |
+| `nomad-client`  | `service-base` shape + Nomad agent binary (pinned to 1.11.3, checksum-verified) + nomad user + systemd unit | Nomad worker nodes — each runs podman containers for CI jobs at runtime    |
 
 The Nomad service in `nomad-client` is installed but **not enabled**
 — operator drops a config at `/etc/nomad.d/nomad.hcl` then
@@ -125,6 +125,46 @@ org-agnostic.
 `trixie` (Debian 13) is hard-coded in the recipe. Bumping a release is
 a deliberate change (`feat: bump service-base to <next>`) — not a
 moving target via `latest`.
+
+### Pinned, checksum-verified Nomad
+
+`nomad-client` installs a specific Nomad version (currently
+**1.11.3**), fetched from `releases.hashicorp.com` and verified
+against the SHA256 that HashiCorp publishes for that release. An
+unexpected hash fails the build rather than baking unverified bits
+into the template every CI runner in the fleet boots from.
+
+Bumping means changing **two** values in
+`images/nomad-client/image.yaml` — `NOMAD_VERSION` and
+`NOMAD_SHA256`. Get the checksum from:
+
+```bash
+curl -s https://releases.hashicorp.com/nomad/<VERSION>/nomad_<VERSION>_SHA256SUMS \
+  | grep linux_amd64
+```
+
+### Upgrading to Nomad 2.x
+
+This image is deliberately held on the 1.x line. **Check your Nomad
+servers before moving it.**
+
+Nomad requires servers to be upgraded before clients, and does not
+support skipping minor versions. A client image jumping straight from
+1.x to 2.x will fail to join a 1.x server fleet — and since this
+template is what every CI runner node boots from, that takes the whole
+runner pool offline at once.
+
+The order is:
+
+1. Check what the fleet's Nomad **servers** run: `nomad server members`.
+2. Upgrade the servers along the supported path (1.9 → 1.10 → 1.11 →
+   2.0), one minor at a time, letting each settle.
+3. Only then bump `NOMAD_VERSION` + `NOMAD_SHA256` here, rebuild, and
+   roll the client LXCs.
+
+Until step 2 is done, 1.11.3 is the correct pin: it's the head of the
+1.x line, so it's the furthest this image can go while still being
+able to talk to a 1.x server.
 
 ### CI builds the artefacts
 
