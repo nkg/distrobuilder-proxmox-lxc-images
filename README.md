@@ -93,6 +93,49 @@ lxcs = {
 }
 ```
 
+## Verifying a release
+
+Each release ships, alongside the two tarballs:
+
+| Asset | What it is |
+|---|---|
+| `SHA256SUMS` | checksums for both tarballs |
+| `SHA256SUMS.sig` / `.pem` | cosign keyless signature + certificate |
+| `<image>.spdx.json` | SPDX SBOM of the rootfs package set |
+
+Plus SLSA build provenance recorded against the repository.
+
+```bash
+TAG=v0.3.0
+BASE=https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/${TAG}
+curl -fsSLO ${BASE}/service-base.tar.xz
+curl -fsSLO ${BASE}/SHA256SUMS
+curl -fsSLO ${BASE}/SHA256SUMS.sig
+curl -fsSLO ${BASE}/SHA256SUMS.pem
+
+# 1. Verify the checksum file was signed by this repo's release workflow.
+cosign verify-blob SHA256SUMS \
+  --signature SHA256SUMS.sig \
+  --certificate SHA256SUMS.pem \
+  --certificate-identity-regexp '^https://github.com/nkg/distrobuilder-proxmox-lxc-images/' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+
+# 2. Then check the tarball against it.
+sha256sum --ignore-missing -c SHA256SUMS
+
+# 3. Optionally, confirm the build provenance.
+gh attestation verify service-base.tar.xz \
+  --repo nkg/distrobuilder-proxmox-lxc-images
+```
+
+The signature covers `SHA256SUMS` rather than each tarball
+individually: verifying one signature and then the hashes covers every
+asset, and leaves one thing to check instead of one per file.
+
+Step 1 is the one that matters. `sha256sum -c` on its own only proves
+the file matches a checksum you also downloaded from the same place —
+the signature is what ties both to a build of this repository.
+
 ## Design notes
 
 ### One distro family, multiple recipes
