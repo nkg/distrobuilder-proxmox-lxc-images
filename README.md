@@ -15,7 +15,7 @@ YAML, get back a Proxmox-ready container template.
 | Image           | Description                                                         | Used by                                                                       |
 |-----------------|---------------------------------------------------------------------|-------------------------------------------------------------------------------|
 | `service-base`  | Debian 13 (trixie) + podman + buildah + skopeo + fuse-overlayfs + cloud-init | Long-lived service LXCs (token-server, registry, dispatcher) in the fleet |
-| `nomad-client`  | `service-base` shape + Nomad agent binary (pinned to 1.11.3, checksum-verified) + nomad user + systemd unit | Nomad worker nodes — each runs podman containers for CI jobs at runtime    |
+| `nomad-client`  | `service-base` shape + Nomad agent (2.0.5) + `nomad-driver-podman` (0.6.5), both checksum-verified, + nomad user + systemd unit | Nomad worker nodes — each runs podman containers for CI jobs at runtime    |
 
 The Nomad service in `nomad-client` is installed but **not enabled**
 — operator drops a config at `/etc/nomad.d/nomad.hcl` then
@@ -126,45 +126,59 @@ org-agnostic.
 a deliberate change (`feat: bump service-base to <next>`) — not a
 moving target via `latest`.
 
-### Pinned, checksum-verified Nomad
+### Pinned, checksum-verified Nomad + podman driver
 
-`nomad-client` installs a specific Nomad version (currently
-**1.11.3**), fetched from `releases.hashicorp.com` and verified
-against the SHA256 that HashiCorp publishes for that release. An
-unexpected hash fails the build rather than baking unverified bits
-into the template every CI runner in the fleet boots from.
+`nomad-client` installs two pinned binaries, each fetched from
+`releases.hashicorp.com` and verified against the SHA256 HashiCorp
+publishes for that release. An unexpected hash fails the build rather
+than baking unverified bits into the template every CI runner in the
+fleet boots from.
 
-Bumping means changing **two** values in
-`images/nomad-client/image.yaml` — `NOMAD_VERSION` and
-`NOMAD_SHA256`. Get the checksum from:
+| Component | Version | Installed to |
+|---|---|---|
+| Nomad agent | **2.0.5** | `/usr/local/bin/nomad` |
+| `nomad-driver-podman` | **0.6.5** | `/var/lib/nomad/plugins/` |
+
+**The podman task driver is a separate plugin** — the Nomad binary
+doesn't bundle it. Every job this platform runs uses
+`driver = "podman"`, and a client missing the plugin comes up looking
+perfectly healthy while placing nothing: allocations just sit pending
+with a "missing drivers" constraint failure. It's baked in so that
+can't happen.
+
+`/etc/nomad.d/00-base.hcl` sets `data_dir` and `plugin_dir`. Nomad
+merges every `*.hcl` in that directory, so the operator's `nomad.hcl`
+layers client config on top without restating the paths. Leave the
+base file in place — `plugin_dir` is what makes the driver findable.
+
+Bumping means changing **four** values in
+`images/nomad-client/image.yaml` — a version and a checksum for each
+component:
 
 ```bash
 curl -s https://releases.hashicorp.com/nomad/<VERSION>/nomad_<VERSION>_SHA256SUMS \
   | grep linux_amd64
+curl -s https://releases.hashicorp.com/nomad-driver-podman/<VERSION>/nomad-driver-podman_<VERSION>_SHA256SUMS \
+  | grep linux_amd64
 ```
 
-### Upgrading to Nomad 2.x
+### Upgrading Nomad
 
-This image is deliberately held on the 1.x line. **Check your Nomad
-servers before moving it.**
-
-Nomad requires servers to be upgraded before clients, and does not
-support skipping minor versions. A client image jumping straight from
-1.x to 2.x will fail to join a 1.x server fleet — and since this
-template is what every CI runner node boots from, that takes the whole
+Nomad requires **servers to be upgraded before clients**, and does not
+support skipping minor versions. Since this template is what every CI
+runner node boots from, getting that order wrong takes the whole
 runner pool offline at once.
 
-The order is:
+Before bumping `NOMAD_VERSION`:
 
 1. Check what the fleet's Nomad **servers** run: `nomad server members`.
-2. Upgrade the servers along the supported path (1.9 → 1.10 → 1.11 →
-   2.0), one minor at a time, letting each settle.
+2. If they're behind, upgrade them first, one minor at a time, letting
+   each settle.
 3. Only then bump `NOMAD_VERSION` + `NOMAD_SHA256` here, rebuild, and
    roll the client LXCs.
 
-Until step 2 is done, 1.11.3 is the correct pin: it's the head of the
-1.x line, so it's the furthest this image can go while still being
-able to talk to a 1.x server.
+This is a non-issue on a greenfield fleet — deploy servers at the same
+2.x version the template carries and there's nothing to sequence.
 
 ### CI builds the artefacts
 
