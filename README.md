@@ -109,7 +109,7 @@ Each release ships, alongside the two tarballs:
 Plus SLSA build provenance recorded against the repository.
 
 ```bash
-TAG=v0.3.0
+TAG=v0.2.0
 BASE=https://github.com/nkg/distrobuilder-proxmox-lxc-images/releases/download/${TAG}
 curl -fsSLO ${BASE}/service-base.tar.xz
 curl -fsSLO ${BASE}/SHA256SUMS
