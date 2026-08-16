@@ -129,9 +129,13 @@ jobs:
         working-directory: assets
         run: |
           set -euo pipefail
+          # cosign v4 removed --output-signature/--output-certificate and
+          # emits the new Sigstore bundle instead: signature, certificate
+          # and inclusion proof in one file. Passing the old flags left
+          # --bundle empty and cosign failed on `create bundle file: open :
+          # no such file or directory`.
           cosign sign-blob --yes \
-            --output-signature SHA256SUMS.sig \
-            --output-certificate SHA256SUMS.pem \
+            --bundle SHA256SUMS.bundle \
             SHA256SUMS
 
       - name: Attest build provenance for the tarballs
@@ -157,6 +161,5 @@ jobs:
             assets/service-base.spdx.json
             assets/nomad-client.spdx.json
             assets/SHA256SUMS
-            assets/SHA256SUMS.sig
-            assets/SHA256SUMS.pem
+            assets/SHA256SUMS.bundle
           fail_on_unmatched_files: true
