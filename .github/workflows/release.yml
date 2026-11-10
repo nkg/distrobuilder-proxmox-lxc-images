@@ -120,7 +120,7 @@ jobs:
           done
 
       - name: Install cosign
-        uses: sigstore/cosign-installer@v4.1.2
+        uses: sigstore/cosign-installer@v4.1.3
 
       # Sign the checksum file rather than each tarball: verifying
       # SHA256SUMS then checking hashes covers every asset, and keeps
